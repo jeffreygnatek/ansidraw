@@ -1,0 +1,23 @@
+[package]
+name = "ansidraw"
+version = "0.1.0"
+edition = "2021"
+description = "A native terminal ANSI art editor in the spirit of ACiDDraw"
+license = "MIT"
+
+[dependencies]
+crossterm = "0.28"
+serde_json = "1"
+png = "0.17"
+
+[[bin]]
+name = "ansidraw"
+path = "src/main.rs"
+
+[[bin]]
+name = "ansidraw-mcp"
+path = "src/bin/mcp.rs"
+
+[[bin]]
+name = "ans2png"
+path = "src/bin/ans2png.rs"
