@@ -71,6 +71,7 @@ provided).
 - `src/main.rs` — the crossterm full-screen editor
 - `src/bin/mcp.rs` — the MCP server (`ansidraw-mcp`)
 - `src/render_png.rs` + `src/bin/ans2png.rs` — PNG rendering (VGA font/palette)
+- `src/animate.rs` + `src/bin/ans2gif.rs` — animated GIFs (reveal + frame stacks)
 - `src/halfblock.rs` — pixel space: half-block encode/decode, lines, ellipses
 - `src/import_image.rs` — PNG → half-block canvas conversion
 - `examples/demo.rs` — generates a sample `.ans`; `examples/recode.rs` — round-trip checker
@@ -135,6 +136,19 @@ shows a file's fonts and measures text width. Most fonts are CAPS-only.
 Saving takes `utf8: true` to write glyphs as UTF-8 instead of CP437 — same
 escape codes, but modern terminals render it directly with `cat`. Classic
 CP437 (the default) is what DOS-era viewers and 16colo.rs expect.
+
+## Animated GIFs
+
+The canvas is already indexed to the xterm-256 palette — GIF's native color
+model — so frames encode with zero quantization. Two modes:
+
+- **Reveal**: any piece "downloads" into view cell-by-cell with a block
+  cursor, like a BBS at modem speed. CLI: `ans2gif file.ans [out.gif]
+  [scale 1-4] [cells-per-frame]`, or the MCP `render_gif` tool (mode
+  "reveal", default).
+- **ANSImation**: build a frame stack with the MCP `frame_push` /
+  `frames_clear` tools (draw, push, modify, push), then `render_gif` with
+  mode "frames" — per-frame delay and final-frame hold configurable.
 
 ## MCP server
 

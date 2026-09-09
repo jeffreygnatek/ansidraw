@@ -1,3 +1,4 @@
+pub mod animate;
 pub mod ansi;
 pub mod canvas;
 pub mod charset;

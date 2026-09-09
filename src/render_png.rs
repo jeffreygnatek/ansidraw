@@ -11,7 +11,7 @@ use std::path::Path;
 use crate::canvas::{Canvas, WIDTH};
 use crate::cp437;
 
-const FONT: &[u8; 4096] = include_bytes!("../assets/vga8x16.bin");
+pub(crate) const FONT: &[u8; 4096] = include_bytes!("../assets/vga8x16.bin");
 const CELL_W: usize = 8;
 const CELL_H: usize = 16;
 

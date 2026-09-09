@@ -9,6 +9,7 @@ license = "MIT"
 crossterm = "0.28"
 serde_json = "1"
 png = "0.17"
+gif = "0.13"
 
 [[bin]]
 name = "ansidraw"
@@ -21,3 +22,7 @@ path = "src/bin/mcp.rs"
 [[bin]]
 name = "ans2png"
 path = "src/bin/ans2png.rs"
+
+[[bin]]
+name = "ans2gif"
+path = "src/bin/ans2gif.rs"

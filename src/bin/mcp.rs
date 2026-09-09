@@ -11,11 +11,12 @@ use serde_json::{json, Value};
 
 use ansidraw::canvas::{Canvas, Cell, MAX_ROWS, WIDTH};
 use ansidraw::sauce::Sauce;
-use ansidraw::{ansi, halfblock, import_image, render_png, sauce, tdf};
+use ansidraw::{animate, ansi, halfblock, import_image, render_png, sauce, tdf};
 
 struct State {
     canvas: Canvas,
     sauce: Sauce,
+    frames: Vec<Canvas>,
 }
 
 fn main() {
@@ -23,6 +24,7 @@ fn main() {
     let mut state = State {
         canvas: Canvas::new(25),
         sauce: Sauce::default(),
+        frames: Vec::new(),
     };
 
     for line in stdin.lock().lines() {
@@ -102,7 +104,7 @@ fn tool_defs() -> Value {
                 "y": { "type": "integer" },
                 "text": { "type": "string" },
                 "fg": { "description": format!("Foreground color, {color_desc} (default gray)") },
-                "bg": { "description": "Background color 0-7 or name (default black)" }
+                "bg": { "description": "Background color: 0-7 or name for classic ANSI, or any xterm-256 index (e.g. 231 = white; needs modern terminal) (default black)" }
             }, "required": ["x", "y", "text"] }
         },
         {
@@ -228,6 +230,32 @@ fn tool_defs() -> Value {
                 "crop_w": { "type": "integer", "description": "Crop width" },
                 "crop_h": { "type": "integer", "description": "Crop height" },
                 "colors": { "type": "integer", "enum": [16, 256], "description": "Palette: 16 = classic VGA (default, works in every viewer), 256 = xterm-256 (real skin tones and smooth ramps; needs a modern terminal, saves with 38;5/48;5 codes)" }
+            }, "required": ["path"] }
+        },
+        {
+            "name": "frame_push",
+            "description": "Snapshot the current canvas as one animation frame (for render_gif \
+                mode 'frames'). Draw, push, modify, push — each snapshot is one GIF frame.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "frames_clear",
+            "description": "Discard all pushed animation frames.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "render_gif",
+            "description": "Write a looping animated GIF. Mode 'reveal' (default) animates the \
+                current canvas appearing cell-by-cell like a BBS download at modem speed, with \
+                a block cursor. Mode 'frames' encodes the stack built with frame_push (ANSImation). \
+                The canvas's exact 256-color palette is the GIF palette — no quantization.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string", "description": ".gif file path" },
+                "mode": { "type": "string", "enum": ["reveal", "frames"] },
+                "scale": { "type": "integer", "description": "Pixel scale 1-4 (default 1)" },
+                "delay_ms": { "type": "integer", "description": "Per-frame delay in ms (default 40)" },
+                "speed": { "type": "integer", "description": "Reveal mode: cells per frame (default 80 = one row)" },
+                "hold_ms": { "type": "integer", "description": "Extra hold on the final frame in ms (default 1500)" }
             }, "required": ["path"] }
         },
         {
@@ -467,6 +495,46 @@ fn tool_call(state: &mut State, params: &Value) -> Value {
                 Err(e) => err_text(format!("import failed: {e}")),
             }
         }
+        "frame_push" => {
+            state.frames.push(state.canvas.clone());
+            ok_text(format!("Frame {} captured.", state.frames.len()))
+        }
+        "frames_clear" => {
+            state.frames.clear();
+            ok_text("Frames cleared.".into())
+        }
+        "render_gif" => {
+            let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                return err_text("path is required".into());
+            };
+            let mut path = PathBuf::from(path);
+            if path.extension().is_none() {
+                path.set_extension("gif");
+            }
+            let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("reveal");
+            let scale = get_usize(&args, "scale").unwrap_or(1).clamp(1, 4);
+            let delay_cs = (get_usize(&args, "delay_ms").unwrap_or(40) / 10).clamp(2, 6000) as u16;
+            let hold_cs = (get_usize(&args, "hold_ms").unwrap_or(1500) / 10).min(6000) as u16;
+            let frames: Vec<Canvas> = match mode {
+                "frames" => {
+                    if state.frames.is_empty() {
+                        return err_text("no frames pushed — use frame_push first".into());
+                    }
+                    state.frames.clone()
+                }
+                _ => {
+                    let speed = get_usize(&args, "speed").unwrap_or(80).max(1);
+                    animate::reveal_frames(&state.canvas, speed)
+                }
+            };
+            match animate::write_gif(&frames, &path, scale, delay_cs, hold_cs) {
+                Ok((w, h, n)) => ok_text(format!(
+                    "Wrote {} ({w}x{h}, {n} frames, looping).",
+                    path.display()
+                )),
+                Err(e) => err_text(format!("gif failed: {e}")),
+            }
+        }
         "render_png" => match render_png_tool(state, &args) {
             Ok(v) => v,
             Err(e) => err_text(e),
@@ -492,8 +560,8 @@ fn put_text(state: &mut State, args: &Value) -> Result<String, String> {
         .get("text")
         .and_then(|v| v.as_str())
         .ok_or("text is required")?;
-    let fg = parse_color(args.get("fg"), 16)?.unwrap_or(7);
-    let bg = parse_color(args.get("bg"), 8)?.unwrap_or(0);
+    let fg = parse_color(args.get("fg"), 256)?.unwrap_or(7);
+    let bg = parse_color(args.get("bg"), 256)?.unwrap_or(0);
     let mut cells = 0;
     let mut rows = 0;
     for (dy, line) in text.split('\n').enumerate() {
@@ -524,8 +592,8 @@ fn fill_rect(state: &mut State, args: &Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .and_then(|s| s.chars().next())
         .unwrap_or(' ');
-    let fg = parse_color(args.get("fg"), 16)?.unwrap_or(7);
-    let bg = parse_color(args.get("bg"), 8)?.unwrap_or(0);
+    let fg = parse_color(args.get("fg"), 256)?.unwrap_or(7);
+    let bg = parse_color(args.get("bg"), 256)?.unwrap_or(0);
     for yy in y..(y + h).min(MAX_ROWS) {
         for xx in x..(x + w).min(WIDTH) {
             state.canvas.set(xx, yy, Cell { ch, fg, bg });
@@ -540,8 +608,8 @@ fn draw_box(state: &mut State, args: &Value) -> Result<String, String> {
     let w = get_usize(args, "w").ok_or("w is required")?.max(2);
     let h = get_usize(args, "h").ok_or("h is required")?.max(2);
     let style = args.get("style").and_then(|v| v.as_str()).unwrap_or("single");
-    let fg = parse_color(args.get("fg"), 16)?.unwrap_or(7);
-    let bg = parse_color(args.get("bg"), 8)?.unwrap_or(0);
+    let fg = parse_color(args.get("fg"), 256)?.unwrap_or(7);
+    let bg = parse_color(args.get("bg"), 256)?.unwrap_or(0);
     // [tl, tr, bl, br, horiz, vert]
     let g: [char; 6] = match style {
         "double" => ['╔', '╗', '╚', '╝', '═', '║'],
@@ -720,13 +788,13 @@ fn get_usize(args: &Value, key: &str) -> Option<usize> {
 }
 
 /// Accepts an integer or a color name; `limit` is 16 for fg, 8 for bg.
-fn parse_color(v: Option<&Value>, limit: u8) -> Result<Option<u8>, String> {
+fn parse_color(v: Option<&Value>, limit: u16) -> Result<Option<u8>, String> {
     let Some(v) = v else { return Ok(None) };
     if v.is_null() {
         return Ok(None);
     }
-    let n = if let Some(n) = v.as_u64() {
-        n as u8
+    let n: u16 = if let Some(n) = v.as_u64() {
+        n.min(u16::MAX as u64) as u16
     } else if let Some(s) = v.as_str() {
         match s.to_lowercase().replace([' ', '-', '_'], "").as_str() {
             "black" => 0,
@@ -753,5 +821,5 @@ fn parse_color(v: Option<&Value>, limit: u8) -> Result<Option<u8>, String> {
     if n >= limit {
         return Err(format!("color {n} out of range (max {})", limit - 1));
     }
-    Ok(Some(n))
+    Ok(Some(n as u8))
 }
